@@ -1,165 +1,139 @@
+# config.py
+import yaml
+from pathlib import Path
+import bcrypt
 import streamlit as st
-import torch
-from transformers import (
-    VisionEncoderDecoderModel, 
-    ViTImageProcessor, 
-    AutoTokenizer,
-    AutoModelForCausalLM,
-)
+import os
+
+def load_config():
+    config_path = Path(".streamlit/config.yaml")
+    if config_path.exists():
+        with open(config_path) as file:
+            return yaml.safe_load(file)
+    return {"users": {}}
+
+def save_config(config):
+    config_path = Path(".streamlit/config.yaml")
+    config_path.parent.mkdir(exist_ok=True)
+    with open(config_path, "w") as file:
+        yaml.dump(config, file)
+
+def hash_password(password):
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+def verify_password(password, hashed):
+    return bcrypt.checkpw(password.encode(), hashed.encode())
+
+# auth.py
+def init_auth():
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    if 'username' not in st.session_state:
+        st.session_state.username = None
+
+def login_user(username, password):
+    config = load_config()
+    if username in config['users']:
+        if verify_password(password, config['users'][username]['password']):
+            st.session_state.authenticated = True
+            st.session_state.username = username
+            return True
+    return False
+
+def register_user(username, password, api_key):
+    config = load_config()
+    if username in config['users']:
+        return False, "Username already exists"
+    
+    config['users'][username] = {
+        'password': hash_password(password),
+        'api_key': api_key
+    }
+    save_config(config)
+    return True, "Registration successful"
+
+def logout_user():
+    st.session_state.authenticated = False
+    st.session_state.username = None
+
+# app.py
+import streamlit as st
+import anthropic
 from PIL import Image
 import io
+import base64
+import json
+from pathlib import Path
 
-# Model configurations
-@st.cache_resource
-def load_models():
-    # Load VIT-GPT2 for initial image captioning
-    image_processor = ViTImageProcessor.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
-    caption_model = VisionEncoderDecoderModel.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
-    caption_tokenizer = AutoTokenizer.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
+# Import authentication functions
+from auth import init_auth, login_user, register_user, logout_user
+
+# Initialize authentication state
+init_auth()
+
+# Authentication UI
+def show_auth_ui():
+    st.title("PicTunes Authentication")
     
-    # Load Phi-3.5 for Instagram caption generation
-    phi_tokenizer = AutoTokenizer.from_pretrained("microsoft/phi-3.5-mini-instruct", trust_remote_code=True)
-    phi_model = AutoModelForCausalLM.from_pretrained(
-        "microsoft/phi-3.5-mini-instruct",
-        torch_dtype=torch.float16,
-        trust_remote_code=True
-    )
+    tab1, tab2 = st.tabs(["Login", "Register"])
     
-    # Move models to appropriate device
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    caption_model.to(device)
-    phi_model.to(device)
-    
-    return (image_processor, caption_model, caption_tokenizer, 
-            phi_tokenizer, phi_model)
-
-def generate_initial_caption(image, image_processor, model, tokenizer):
-    # Preprocess image
-    pixel_values = image_processor(image, return_tensors="pt").pixel_values.to(model.device)
-    
-    # Generate caption
-    output_ids = model.generate(
-        pixel_values,
-        max_length=30,
-        num_beams=4,
-        return_dict_in_generate=True
-    ).sequences
-    
-    # Decode caption
-    return tokenizer.decode(output_ids[0], skip_special_tokens=True)
-
-def generate_instagram_caption(initial_caption, phi_tokenizer, phi_model):
-    prompt = f"generate one instagram post caption for image description {initial_caption}"
-    
-    inputs = phi_tokenizer(prompt, return_tensors="pt", add_special_tokens=True)
-    inputs = {k: v.to(phi_model.device) for k, v in inputs.items()}
-    
-    outputs = phi_model.generate(
-        **inputs,
-        max_length=200,
-        num_beams=4,
-        temperature=0.7,
-        top_p=0.9,
-        pad_token_id=phi_tokenizer.pad_token_id
-    )
-    
-    return phi_tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-def suggest_music(caption):
-    # Simple mood-based music suggestion
-    music_mapping = {
-        'beautiful': 'Ambient Piano Melodies',
-        'sunset': 'Chill Evening Beats',
-        'nature': 'Forest Ambience',
-        'city': 'Urban Lofi Mix',
-        'beach': 'Tropical House Vibes',
-        'people': 'Feel Good Pop',
-        'food': 'Cafe Jazz',
-        'night': 'Deep House Mix'
-    }
-    
-    caption = caption.lower()
-    for keyword, music in music_mapping.items():
-        if keyword in caption:
-            return music
-    return 'Chill Beats Mix'  # Default suggestion
-
-# Initialize Streamlit app
-st.title('PicTunes')
-st.text('Your AI-Powered Creative Partner for Instagram Posts.')
-
-# Initialize session state
-if 'model_loaded' not in st.session_state:
-    st.session_state.model_loaded = False
-
-# Load models
-if not st.session_state.model_loaded:
-    try:
-        with st.spinner('Starting App'):
-            models = load_models()
-            (st.session_state.image_processor, 
-             st.session_state.caption_model,
-             st.session_state.caption_tokenizer,
-             st.session_state.phi_tokenizer,
-             st.session_state.phi_model) = models
-            st.session_state.model_loaded = True
-    except Exception as e:
-        st.error(f'Error loading models: {str(e)}')
-        st.stop()
-
-# Create a placeholder for the image
-image_placeholder = st.empty()
-
-# File uploader
-uploaded_file = st.file_uploader(label='Upload Image', type=['png', 'jpg', 'jpeg'])
-
-if uploaded_file is None:
-    # Display placeholder image
-    placeholder_img = Image.new('RGB', (600, 400), color='lightgray')
-    img_byte_arr = io.BytesIO()
-    placeholder_img.save(img_byte_arr, format='PNG')
-    img_byte_arr.seek(0)
-    image_placeholder.image(img_byte_arr, caption='No image uploaded', use_container_width=True)
-else:
-    try:
-        # Display the uploaded image
-        image = Image.open(uploaded_file)
-        image_placeholder.image(image, caption='Uploaded Image', use_container_width=True)
-
-        # Generate initial caption
-        with st.spinner('Analyzing your image...'):
-            initial_caption = generate_initial_caption(
-                image,
-                st.session_state.image_processor,
-                st.session_state.caption_model,
-                st.session_state.caption_tokenizer
-            )
+    with tab1:
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            submit = st.form_submit_button("Login")
             
-            # Generate Instagram caption
-            instagram_caption = generate_instagram_caption(
-                initial_caption,
-                st.session_state.phi_tokenizer,
-                st.session_state.phi_model
-            )
+            if submit:
+                if login_user(username, password):
+                    st.success("Login successful!")
+                    st.rerun()
+                else:
+                    st.error("Invalid username or password")
+    
+    with tab2:
+        with st.form("register_form"):
+            new_username = st.text_input("Username")
+            new_password = st.text_input("Password", type="password")
+            confirm_password = st.text_input("Confirm Password", type="password")
+            api_key = st.text_input("Anthropic API Key", type="password")
+            submit = st.form_submit_button("Register")
+            
+            if submit:
+                if new_password != confirm_password:
+                    st.error("Passwords do not match")
+                elif not new_username or not new_password or not api_key:
+                    st.error("All fields are required")
+                else:
+                    success, message = register_user(new_username, new_password, api_key)
+                    if success:
+                        st.success(message)
+                    else:
+                        st.error(message)
 
-        # Display the description
-        st.write("### Generated Caption:")
-        st.text(instagram_caption)
+# Main application code (your existing PicTunes code)
+def main_app():
+    # Initialize Anthropic client with user's API key
+    config = load_config()
+    api_key = config['users'][st.session_state.username]['api_key']
+    client = anthropic.Client(api_key=api_key)
+    
+    st.title('PicTunes')
+    st.text('Your AI-Powered Creative Partner for Instagram Posts')
+    
+    # Add logout button
+    if st.sidebar.button("Logout"):
+        logout_user()
+        st.rerun()
+    
+    # Show welcome message
+    st.sidebar.success(f"Welcome, {st.session_state.username}!")
+    
+    # Rest of your existing PicTunes code here
+    # (Copy all the image processing and caption generation code here)
+    # ...
 
-        # Generate music suggestion
-        with st.spinner('Suggesting the perfect music for your post...'):
-            suggested_music = suggest_music(initial_caption)
-
-        st.write("### Music Suggestion:")
-        st.info(f"🎵 {suggested_music}")
-
-        # Show success and balloons
-        st.success('Done!')
-        st.balloons()
-
-    except Exception as e:
-        st.error(f'Error processing image: {str(e)}')
-        st.write("Full error details:", str(e))
-
-st.divider()
-st.text("Created by Sushant Garudkar | Powered by AI")
+# Main execution
+if not st.session_state.authenticated:
+    show_auth_ui()
+else:
+    main_app()
