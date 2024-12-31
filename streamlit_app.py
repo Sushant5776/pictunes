@@ -1,72 +1,10 @@
-# config.py
-import yaml
-from pathlib import Path
-import bcrypt
-import streamlit as st
-import os
-
-def load_config():
-    config_path = Path(".streamlit/config.yaml")
-    if config_path.exists():
-        with open(config_path) as file:
-            return yaml.safe_load(file)
-    return {"users": {}}
-
-def save_config(config):
-    config_path = Path(".streamlit/config.yaml")
-    config_path.parent.mkdir(exist_ok=True)
-    with open(config_path, "w") as file:
-        yaml.dump(config, file)
-
-def hash_password(password):
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-
-def verify_password(password, hashed):
-    return bcrypt.checkpw(password.encode(), hashed.encode())
-
-# auth.py
-def init_auth():
-    if 'authenticated' not in st.session_state:
-        st.session_state.authenticated = False
-    if 'username' not in st.session_state:
-        st.session_state.username = None
-
-def login_user(username, password):
-    config = load_config()
-    if username in config['users']:
-        if verify_password(password, config['users'][username]['password']):
-            st.session_state.authenticated = True
-            st.session_state.username = username
-            return True
-    return False
-
-def register_user(username, password, api_key):
-    config = load_config()
-    if username in config['users']:
-        return False, "Username already exists"
-    
-    config['users'][username] = {
-        'password': hash_password(password),
-        'api_key': api_key
-    }
-    save_config(config)
-    return True, "Registration successful"
-
-def logout_user():
-    st.session_state.authenticated = False
-    st.session_state.username = None
-
-# app.py
 import streamlit as st
 import anthropic
 from PIL import Image
 import io
-import base64
-import json
-from pathlib import Path
-
-# Import authentication functions
 from auth import init_auth, login_user, register_user, logout_user
+from config import load_config
+from image_processing import generate_caption_and_music
 
 # Initialize authentication state
 init_auth()
@@ -110,27 +48,65 @@ def show_auth_ui():
                     else:
                         st.error(message)
 
-# Main application code (your existing PicTunes code)
 def main_app():
-    # Initialize Anthropic client with user's API key
-    config = load_config()
-    api_key = config['users'][st.session_state.username]['api_key']
-    client = anthropic.Client(api_key=api_key)
+    # Initialize Anthropic client if not already initialized
+    if st.session_state.client is None:
+        config = load_config()
+        api_key = config['users'][st.session_state.username]['api_key']
+        st.session_state.client = anthropic.Client(api_key=api_key)
     
     st.title('PicTunes')
     st.text('Your AI-Powered Creative Partner for Instagram Posts')
     
-    # Add logout button
-    if st.sidebar.button("Logout"):
-        logout_user()
-        st.rerun()
+    # Sidebar
+    with st.sidebar:
+        st.success(f"Welcome, {st.session_state.username}!")
+        st.info("ℹ️ Using Claude 3 Sonnet (~$0.001 per image)")
+        if st.button("Logout"):
+            logout_user()
+            st.rerun()
     
-    # Show welcome message
-    st.sidebar.success(f"Welcome, {st.session_state.username}!")
-    
-    # Rest of your existing PicTunes code here
-    # (Copy all the image processing and caption generation code here)
-    # ...
+    # Create a placeholder for the image
+    image_placeholder = st.empty()
+
+    # File uploader
+    uploaded_file = st.file_uploader(label='Upload Image', type=['png', 'jpg', 'jpeg'])
+
+    if uploaded_file is None:
+        # Display placeholder image
+        placeholder_img = Image.new('RGB', (600, 400), color='lightgray')
+        img_byte_arr = io.BytesIO()
+        placeholder_img.save(img_byte_arr, format='PNG')
+        img_byte_arr.seek(0)
+        image_placeholder.image(img_byte_arr, caption='No image uploaded', use_container_width=True)
+    else:
+        try:
+            # Display the uploaded image
+            image = Image.open(uploaded_file)
+            image_placeholder.image(image, caption='Uploaded Image', use_container_width=True)
+
+            # Generate caption and music suggestion
+            with st.spinner('Analyzing your image...'):
+                caption, music = generate_caption_and_music(st.session_state.client, image)
+
+            # Display the caption
+            st.write("### Generated Caption:")
+            st.text_area("Caption (copy to clipboard)", caption, height=100)
+
+            # Display music suggestion
+            st.write("### Music Suggestion:")
+            st.info(f"🎵 {music}")
+
+            # Show success and balloons
+            st.success('Done!')
+            st.balloons()
+
+        except Exception as e:
+            st.error(f'Error processing image: {str(e)}')
+            st.write("Full error details:", str(e))
+
+    st.divider()
+    st.text("Created by Sushant Garudkar | Powered by Anthropic Claude")
 
 # Main execution
 if not st.session_state.authenticated:
