@@ -3,3 +3,5 @@ anthropic
 pillow
 bcrypt
 pyyaml
+instabot
+pyperclip

@@ -5,6 +5,7 @@ import io
 from auth import init_auth, login_user, register_user, logout_user
 from config import load_config
 from image_processing import generate_caption_and_music
+from instagramSDK import init_instagram_bot, post_to_instagram
 
 # Initialize authentication state
 init_auth()
@@ -62,6 +63,19 @@ def main_app():
     with st.sidebar:
         st.success(f"Welcome, {st.session_state.username}!")
         st.info("ℹ️ Using Claude 3 Sonnet (~$0.001 per image)")
+
+        # Instagram login section
+        st.subheader("Instagram Connection")
+        with st.expander("Connect Instagram"):
+            insta_username = st.text_input("Instagram Username", type="default")
+            insta_password = st.text_input("Instagram Password", type="password")
+            if st.button("Connect"):
+                try:
+                    st.session_state.insta_bot = init_instagram_bot(insta_username, insta_password)
+                    st.success("Connected to Instagram!")
+                except Exception as e:
+                    st.error(f"Instagram connection failed: {str(e)}")
+
         if st.button("Logout"):
             logout_user()
             st.rerun()
@@ -89,17 +103,38 @@ def main_app():
             with st.spinner('Analyzing your image...'):
                 caption, music = generate_caption_and_music(st.session_state.client, image)
 
+            # Display results in columns
+            col1, col2 = st.columns([2, 1])
+
             # Display the caption
-            st.write("### Generated Caption:")
-            st.text_area("Caption (copy to clipboard)", caption, height=100)
+            with col1:
+                st.write("### Generated Caption:")
+                caption_container = st.container()
+                with caption_container:
+                    st.text_area("Caption", caption, height=150, key="caption_text")
+                    if st.button("📋 Copy Caption"):
+                        st.toast("Caption copied to clipboard!")
+                        st.write('<script>navigator.clipboard.writeText(`' + caption + '`);</script>', unsafe_allow_html=True)
 
             # Display music suggestion
-            st.write("### Music Suggestion:")
-            st.info(f"🎵 {music}")
+            with col2:
+                st.write("### Music Suggestion:")
+                st.info(f"🎵 {music}")
 
-            # Show success and balloons
-            st.success('Done!')
-            st.balloons()
+            # Instagram posting section
+            st.write("### Share to Instagram")
+            if 'insta_bot' in st.session_state and st.session_state.insta_bot:
+                if st.button("🚀 Post to Instagram"):
+                    with st.spinner("Posting to Instagram..."):
+                        if post_to_instagram(st.session_state.insta_bot, image, caption, music):
+                            st.success("Posted successfully to Instagram!")
+                            st.balloons()
+                        else:
+                            st.error("Failed to post to Instagram. Please try again.")
+            else:
+                st.warning("Please connect your Instagram account in the sidebar to enable posting.")
+
+            st.success('Processing complete!')
 
         except Exception as e:
             st.error(f'Error processing image: {str(e)}')
