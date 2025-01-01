@@ -103,23 +103,15 @@ def main_app():
             with st.spinner('Analyzing your image...'):
                 caption, music = generate_caption_and_music(st.session_state.client, image)
 
-            # Display results in columns
-            col1, col2 = st.columns([2, 1])
-
             # Display the caption
-            with col1:
-                st.write("### Generated Caption:")
-                caption_container = st.container()
-                with caption_container:
-                    st.text_area("Caption", caption, height=150, key="caption_text")
-                    if st.button("📋 Copy Caption"):
-                        st.toast("Caption copied to clipboard!")
-                        st.write('<script>navigator.clipboard.writeText(`' + caption + '`);</script>', unsafe_allow_html=True)
+            st.write("### Post Caption ✍️")
+            caption_container = st.container()
+            with caption_container:
+                st.text_area("Caption", caption, height=150, key="caption_text")
 
             # Display music suggestion
-            with col2:
-                st.write("### Music Suggestion:")
-                st.info(f"🎵 {music}")
+            st.write("### Vibe Check 🎵")
+            st.info(f"{music}")
 
             # Instagram posting section
             st.write("### Share to Instagram")
